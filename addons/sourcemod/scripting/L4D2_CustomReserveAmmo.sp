@@ -7,11 +7,11 @@
 #include <sdktools>
 
 //Define Plugin Info
-#define NAME 					"L4D2 Custom Reserve Ammo Plugin | L4D2自定义后备子弹插件" //定义插件名字
-#define AUTHOR 					"ZZH | 凌凌漆" //定义作者
-#define DESCRIPTION 			"L4D2 Custom Reserve Ammo Plugin | L4D2自定义后备子弹插件"	//定义插件描述
-#define	VERSION 				"1.0.0.0" //定义插件版本
-#define URL 					"https://steamcommunity.com/id/ChengChiHou/" //定义作者联系地址
+#define NAME 					"L4D2 Custom Reserve Ammo Plugin | L4D2自定义后备子弹插件" //Plugin name
+#define AUTHOR 					"ZZH | 凌凌漆" //Author
+#define DESCRIPTION 			"L4D2 Custom Reserve Ammo Plugin | L4D2自定义后备子弹插件"	//Plugin Description
+#define	VERSION 				"1.0.0.1" //Plugin Version
+#define URL 					"https://steamcommunity.com/id/ChengChiHou/" //Author URL
 
 char g_szFilePath[512];
 
@@ -48,10 +48,20 @@ public void OnPluginStart()
 	}
 
 	HookEvent("player_use", Event_PlayerUse, EventHookMode_Post);
+	HookEvent("weapon_fire", Event_WeaponFire, EventHookMode_Post);
 }
 
 public void OnMapStart()
 {
+	if(!IsModelPrecached("models/w_models/weapons/w_m60.mdl"))
+	{
+		PrecacheModel("models/w_models/weapons/w_m60.mdl");
+	}
+	if(!IsModelPrecached("models/v_models/v_m60.mdl"))
+	{
+		PrecacheModel("models/v_models/v_m60.mdl");
+	}
+
 	ResetAllWeapon();
 }
 
@@ -102,6 +112,8 @@ public void LoadConfigs()
 		kv.SetString("weapon_autoshotgun", "200");
 		kv.SetString("weapon_shotgun_chrome", "160");
 		kv.SetString("weapon_pumpshotgun", "160");
+		kv.SetString("weapon_grenade_launcher", "100");
+		kv.SetString("weapon_rifle_m60", "500");
 		kv.Rewind();
 		kv.ExportToFile(g_szFilePath);
 		delete kv;
@@ -206,6 +218,49 @@ public Action Event_PlayerUse(Event hEvent, const char[] name, bool dontBroadcas
 	}
 }
 
+public Action Event_WeaponFire(Event hEvent, const char[] name, bool dontBroadcast)
+{
+	int client = GetClientOfUserId(hEvent.GetInt("userid"));
+	if(IsValidClient(client) && IsPlayerAlive(client) && GetClientTeam(client) == 2)
+	{
+		int weapon = GetEntPropEnt(client, Prop_Data, "m_hActiveWeapon");
+		if(weapon != -1)
+		{
+			char classname[256];
+			GetEdictClassname(weapon, classname, sizeof(classname));
+			if(StrEqual(classname, "weapon_rifle_m60", false))
+			{
+				/* Draw lessons from plugin "[L4D2] Improved Prevent M60 Drop" */
+				bool InReloadM60;
+				int Clip = GetEntProp(weapon, Prop_Data, "m_iClip1");
+				int PrimType = GetEntProp(weapon, Prop_Send, "m_iPrimaryAmmoType");
+				int Ammo = GetEntProp(client, Prop_Send, "m_iAmmo", _, PrimType);
+				int Laser = GetEntProp(weapon, Prop_Send, "m_upgradeBitVec");
+				int InReload = GetEntProp(weapon, Prop_Data, "m_bInReload");
+				if(Clip == 1)
+				{
+					InReloadM60 = true;
+				}
+				if(InReload)
+				{
+					return;
+				}
+				if(Clip <= 1 && InReloadM60)
+				{
+					AcceptEntityInput(weapon, "kill");
+					int M60 = CreateEntityByName("weapon_rifle_m60");
+					DispatchSpawn(M60);
+					EquipPlayerWeapon(client, M60);
+					SetEntProp(M60, Prop_Send, "m_iClip1", 0);
+					SetEntProp(client, Prop_Send, "m_iAmmo", Ammo, _, PrimType);
+					SetEntProp(M60, Prop_Send, "m_upgradeBitVec", Laser);
+					InReloadM60 = false;
+				}
+			}
+		}
+	}
+}
+
 stock void ResetAllWeapon()
 {
 	for(int i = 0; i < 2048; i++)
@@ -217,84 +272,68 @@ stock void ResetAllWeapon()
 	}
 }
 
-//Check If Valid Client
+//Check If is Valid Client
 stock bool IsValidClient(int client, bool AllowBot = true, bool AllowDeath = true, bool AllowSpectator = true, bool AllowReplay = true)
 {
-	if(client < 1 || client > MaxClients) //判断服务器是否不存在玩家或满员
+	if(client < 1 || client > MaxClients) //Check if is invalid client
 	{
 		return false;
 	}
-	if(!IsClientConnected(client) || !IsClientInGame(client)) //判断玩家是否没有连接服务器成功或没有进入游戏
+	if(!IsClientConnected(client) || !IsClientInGame(client)) //Check if is player not in game
 	{
 		return false;
 	}
-	if(!AllowReplay) //是否允许玩家是GOTV或回放机器人？
+	if(IsClientSourceTV(client) || IsClientReplay(client)) //Check if is sourcetv or replay not
 	{
-		if(IsClientSourceTV(client) || IsClientReplay(client))
-		{
-			return false;
-		}
+		return false;
 	}
 	return true;
 }
 
 stock void SetReserveAmmo(int client, int weapon, bool playeruse)
 {
-	char classname[256], SlotClass[256];
+	char classname[256];
 	GetEdictClassname(weapon, classname, sizeof(classname));
-	if(playeruse)
+	int slot0 = GetPlayerWeaponSlot(client, 0);
+	if(slot0 != -1)
 	{
-		if(StrEqual(classname, "weapon_ammo_spawn", false))
+		if(playeruse)
 		{
-			int slot0 = GetPlayerWeaponSlot(client, 0);
-			if(slot0 != -1)
+			if(StrEqual(classname, "weapon_ammo_spawn", false))
 			{
 				if(g_bWeaponReserveAmmoSet[slot0])
 				{
-					int AmmoType = 0, AmmoValue = 0;
-					AmmoType = GetEntProp(slot0, Prop_Send, "m_iPrimaryAmmoType");
-					GetEdictClassname(slot0, SlotClass, sizeof(SlotClass));
-					g_smWeaponReserveAmmo.GetValue(SlotClass, AmmoValue);
-					if(AmmoType != -1)
-					{
-						if(GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType) != AmmoValue)
-						{
-							DataPack pack = new DataPack();
-							CreateDataTimer(0.0, Timer_SetPrimaryReserveAmmo, pack, TIMER_FLAG_NO_MAPCHANGE|TIMER_DATA_HNDL_CLOSE);
-							pack.WriteCell(GetClientUserId(client));
-							pack.WriteCell(AmmoType);
-							pack.WriteCell(AmmoValue);
-							pack.WriteCell(slot0);
-						}
-					}
+					SetReserveAmmoCount(client, slot0);
 				}
 			}
 		}
-	}
-	else
-	{
-		int slot0 = GetPlayerWeaponSlot(client, 0);
-		if(slot0 != -1)
+		else
 		{
 			if(!g_bWeaponReserveAmmoSet[slot0])
 			{
-				int AmmoType = 0, AmmoValue = 0;
-				AmmoType = GetEntProp(slot0, Prop_Send, "m_iPrimaryAmmoType");
-				GetEdictClassname(slot0, SlotClass, sizeof(SlotClass));
-				g_smWeaponReserveAmmo.GetValue(SlotClass, AmmoValue);
-				if(AmmoType != -1)
-				{
-					if(GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType) != AmmoValue)
-					{
-						DataPack pack = new DataPack();
-						CreateDataTimer(0.0, Timer_SetPrimaryReserveAmmo, pack, TIMER_FLAG_NO_MAPCHANGE|TIMER_DATA_HNDL_CLOSE);
-						pack.WriteCell(GetClientUserId(client));
-						pack.WriteCell(AmmoType);
-						pack.WriteCell(AmmoValue);
-						pack.WriteCell(slot0);
-					}
-				}
+				SetReserveAmmoCount(client, slot0);
 			}
+		}
+	}
+}
+
+stock void SetReserveAmmoCount(int client, int slot0)
+{
+	char SlotClass[256];
+	int AmmoType = 0, AmmoValue = 0;
+	AmmoType = GetEntProp(slot0, Prop_Send, "m_iPrimaryAmmoType");
+	GetEdictClassname(slot0, SlotClass, sizeof(SlotClass));
+	g_smWeaponReserveAmmo.GetValue(SlotClass, AmmoValue);
+	if(AmmoType != -1)
+	{
+		if(GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType) != AmmoValue)
+		{
+			DataPack pack = new DataPack();
+			CreateDataTimer(0.0, Timer_SetPrimaryReserveAmmo, pack, TIMER_FLAG_NO_MAPCHANGE|TIMER_DATA_HNDL_CLOSE);
+			pack.WriteCell(GetClientUserId(client));
+			pack.WriteCell(AmmoType);
+			pack.WriteCell(AmmoValue);
+			pack.WriteCell(slot0);
 		}
 	}
 }
@@ -302,13 +341,16 @@ stock void SetReserveAmmo(int client, int weapon, bool playeruse)
 stock void SetLastReserveAmmo(int client, int weapon)
 {
 	int AmmoType = GetEntProp(weapon, Prop_Send, "m_iPrimaryAmmoType");
-	if(GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType) != g_iPrimaryWeaponReserveAmmoCount[weapon])
+	if(AmmoType != -1)
 	{
-		DataPack pack = new DataPack();
-		CreateDataTimer(0.0, Timer_SetPrimaryWeaponReserveAmmo, pack, TIMER_FLAG_NO_MAPCHANGE|TIMER_DATA_HNDL_CLOSE);
-		pack.WriteCell(GetClientUserId(client));
-		pack.WriteCell(AmmoType);
-		pack.WriteCell(g_iPrimaryWeaponReserveAmmoCount[weapon]);
+		if(GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType) != g_iPrimaryWeaponReserveAmmoCount[weapon])
+		{
+			DataPack pack = new DataPack();
+			CreateDataTimer(0.0, Timer_SetPrimaryWeaponReserveAmmo, pack, TIMER_FLAG_NO_MAPCHANGE|TIMER_DATA_HNDL_CLOSE);
+			pack.WriteCell(GetClientUserId(client));
+			pack.WriteCell(AmmoType);
+			pack.WriteCell(g_iPrimaryWeaponReserveAmmoCount[weapon]);
+		}
 	}
 }
 
@@ -319,7 +361,10 @@ stock int GetPrimaryWeaponReserveAmmo(int client, int weapon)
 		if(g_bWeaponReserveAmmoSet[weapon])
 		{
 			int AmmoType = GetEntProp(weapon, Prop_Send, "m_iPrimaryAmmoType");
-			return GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType);
+			if(AmmoType != -1)
+			{
+				return GetEntProp(client, Prop_Send, "m_iAmmo", 4, AmmoType);
+			}
 		}
 	}
 	return 0;
